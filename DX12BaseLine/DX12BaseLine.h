@@ -5,3 +5,6 @@
 
 // create swap chain
 #include <dxgi1_6.h>
+
+#include <cmath>
+#include <numbers>

@@ -3,13 +3,34 @@
 #include "GlobalDefinition.h"
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-void initDevice()
+void destoryResources()
+{
+    // wait here for all command completed and destory all resources
+    g_ShutDown = true;
+
+    HRESULT hr;
+    // wait for all previous submitted commands are done.
+    hr = g_pCommandQueue->Signal(g_pFence, g_fenceValue);
+    hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
+    if (WaitForSingleObject(g_fenceEvent, 2000) == WAIT_FAILED)
+    {
+        DWORD errorCode = GetLastError();
+    }
+
+    g_pDxgiFactory->Release();
+}
+
+void initDeviceAndResource()
 {
     HRESULT hr;
 
-    IDXGIFactory4* pDxgiFactory;
+    // enable debugger layer
+    {
+        hr = D3D12GetDebugInterface(IID_PPV_ARGS(&g_pDebugerLayer));
+        g_pDebugerLayer->EnableDebugLayer();
+    }
 
-    hr = CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(&pDxgiFactory));
+    hr = CreateDXGIFactory2(g_enableDebuggerLayer ? DXGI_CREATE_FACTORY_DEBUG : 0, IID_PPV_ARGS(&g_pDxgiFactory));
 
     hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&g_pDevice));
 
@@ -18,8 +39,8 @@ void initDevice()
         D3D12_COMMAND_QUEUE_DESC desc = {};
         desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-		desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-		desc.NodeMask = 0;
+        desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        desc.NodeMask = 0;
         
         hr = g_pDevice->CreateCommandQueue(&desc, IID_PPV_ARGS(&g_pCommandQueue));
     }
@@ -41,7 +62,7 @@ void initDevice()
         desc.Flags = 0;
         // Need a CommandQueue for SwapChain
         IDXGISwapChain1* temp;
-        hr = pDxgiFactory->CreateSwapChainForHwnd(g_pCommandQueue, g_hwnd, &desc, nullptr, nullptr, &temp);
+        hr = g_pDxgiFactory->CreateSwapChainForHwnd(g_pCommandQueue, g_hwnd, &desc, nullptr, nullptr, &temp);
         g_pSwapChain = static_cast<IDXGISwapChain4*>(temp);
     }
     
@@ -54,7 +75,7 @@ void initDevice()
         hr = g_pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_pRtvDescriptorHeap));
     }
     
-	const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     // create rtv descriptor and backbuffer resource
     {
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(g_pRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
@@ -82,11 +103,14 @@ void initDevice()
         g_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     }
 
-    pDxgiFactory->Release();
 }
 
 void render()
 {
+    static float t = 0.f;
+    constexpr float step = 0.01f;
+    t = t + step;
+
     HRESULT hr;
 
     UINT curBackBufferIndex = g_pSwapChain->GetCurrentBackBufferIndex();
@@ -102,7 +126,11 @@ void render()
     
         g_pGraphicsCommandList->ResourceBarrier(1, &barrier);
 
-        FLOAT clearColor[] = {0.4f, 0.6f, 0.9f, 1.0f};
+        FLOAT clearColor[] = {
+            sin(2.f * t + 1.0f) / 2.f + 0.5f,
+            sin(3.f * t + 3.0f) / 2.f + 0.5f,
+            sin(5.f * t + 5.0f) / 2.f + 0.5f,
+            1.0f};
        
         const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
@@ -134,14 +162,17 @@ void render()
     
     // From a driver developer's view, this is in fact, the queue to execute the present, other than the swapchian,
     // Maybe swapChain has to related to a queue during creation.
-    hr = g_pSwapChain->Present(0, 0);
+    // The first paramater in present is VSync,
+    // setting it to 1 means using Vsyn
+    hr = g_pSwapChain->Present(1, 0);
     
-    hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
+    hr = g_pFence->SetEventOnCompletion(g_fenceValue-1, g_fenceEvent);
     
     if (WaitForSingleObject(g_fenceEvent, INFINITE) == WAIT_FAILED)
     {
-        GetLastError();
+        DWORD errorCode = GetLastError();
     }
+
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
@@ -171,14 +202,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     ShowWindow(g_hwnd, nCmdShow);
 
-    initDevice();
+    initDeviceAndResource();
 
     MSG msg = { };
     while (GetMessage(&msg, NULL, 0, 0) > 0)
     {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
-        render();
+        if(!g_ShutDown)
+            render();
     }
 
     return 0;
@@ -188,23 +220,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-
-        // All painting occurs here, between BeginPaint and EndPaint.
-
-        FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
-
-        EndPaint(hwnd, &ps);
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            destoryResources();
+            return 0;
+        default:
+        return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
-    return 0;
-
-    }
-    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
