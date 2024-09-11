@@ -17,3 +17,9 @@ ID3D12Fence* g_pFence;
 IDXGIFactory4* g_pDxgiFactory;
 uint64_t g_fenceValue = 0;
 HANDLE g_fenceEvent;
+UINT g_NumVertices;
+
+ID3D12Resource* g_pVertexBuffer;
+ID3D12Resource* g_pVertexUploadBuffer;
+D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView;
+

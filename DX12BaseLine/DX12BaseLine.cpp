@@ -1,4 +1,3 @@
-#include <windows.h>
 #include "DX12BaseLine.h"
 #include "GlobalDefinition.h"
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -10,7 +9,7 @@ void destoryResources()
 
     HRESULT hr;
     // wait for all previous submitted commands are done.
-    hr = g_pCommandQueue->Signal(g_pFence, g_fenceValue);
+    hr = g_pCommandQueue->Signal(g_pFence, ++g_fenceValue);
     hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
     if (WaitForSingleObject(g_fenceEvent, 2000) == WAIT_FAILED)
     {
@@ -102,6 +101,69 @@ void initDeviceAndResource()
         
         g_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     }
+    
+    // create vertex buffer and upload
+    {
+        const Vertex vertexData[] = {
+            {{0.0f,  0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}}, // top
+            {{0.43f, -0.25f, 0.0f}, {0.0f, 0.0f, 1.0f}}, // right
+            {{-0.43f,  -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}}, // left
+        };
+
+        g_NumVertices = std::size(vertexData);
+        
+        const CD3DX12_HEAP_PROPERTIES heapPropsDefault { D3D12_HEAP_TYPE_DEFAULT };
+        const CD3DX12_HEAP_PROPERTIES heapPropsUpload { D3D12_HEAP_TYPE_UPLOAD };
+
+        const auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(vertexData));
+        
+        // for GPU read
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, IID_PPV_ARGS(&g_pVertexBuffer));
+        // for upload vertex buffer
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&g_pVertexUploadBuffer));
+        
+        // map the upload vertex buffer and upload the vertex data
+        Vertex* mappedVertexData = nullptr;
+        hr = g_pVertexUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertexData));
+        std::ranges::copy(vertexData, mappedVertexData);
+        g_pVertexUploadBuffer->Unmap(0, nullptr);
+        
+		//reset command allocator and command list
+		hr = g_pCommandAllocator->Reset();
+		hr = g_pGraphicsCommandList->Reset(g_pCommandAllocator, nullptr);
+        g_pGraphicsCommandList->CopyResource(g_pVertexBuffer, g_pVertexUploadBuffer);
+        g_pGraphicsCommandList->Close();
+
+        ID3D12CommandList* const commandLists[] = { g_pGraphicsCommandList };
+        g_pCommandQueue->ExecuteCommandLists(std::size(commandLists), commandLists);
+
+        //waitting the fence
+        hr = g_pCommandQueue->Signal(g_pFence, ++g_fenceValue);
+        hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
+        if (WaitForSingleObject(g_fenceEvent, INFINITE) == WAIT_FAILED)
+        {
+            DWORD errorCode = GetLastError();
+        }
+    }
+    
+    // create vertex buffer view
+    {
+        g_vertexBufferView = {};
+        g_vertexBufferView.BufferLocation = g_pVertexBuffer->GetGPUVirtualAddress();
+        g_vertexBufferView.SizeInBytes    = g_NumVertices * sizeof(Vertex);
+        g_vertexBufferView.StrideInBytes  = sizeof(Vertex);
+    }
+
 
 }
 
@@ -158,7 +220,7 @@ void render()
         g_pCommandQueue->ExecuteCommandLists(std::size(commandlists), commandlists);
     }
 
-    hr = g_pCommandQueue->Signal(g_pFence, g_fenceValue++);
+    hr = g_pCommandQueue->Signal(g_pFence, ++g_fenceValue);
     
     // From a driver developer's view, this is in fact, the queue to execute the present, other than the swapchian,
     // Maybe swapChain has to related to a queue during creation.
@@ -166,7 +228,7 @@ void render()
     // setting it to 1 means using Vsyn
     hr = g_pSwapChain->Present(1, 0);
     
-    hr = g_pFence->SetEventOnCompletion(g_fenceValue-1, g_fenceEvent);
+    hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
     
     if (WaitForSingleObject(g_fenceEvent, INFINITE) == WAIT_FAILED)
     {
