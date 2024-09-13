@@ -163,8 +163,61 @@ void initDeviceAndResource()
         g_vertexBufferView.SizeInBytes    = g_NumVertices * sizeof(Vertex);
         g_vertexBufferView.StrideInBytes  = sizeof(Vertex);
     }
+    
+    // init root signature
+    { 
+        CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
+        rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+        ID3D10Blob* pSignatureBlob;
+        ID3D10Blob* pErrorBlob;
 
+        hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &pSignatureBlob, &pErrorBlob);
 
+        hr = g_pDevice->CreateRootSignature(0, pSignatureBlob->GetBufferPointer(), pSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&g_pRootSignature));
+
+        if (pSignatureBlob) pSignatureBlob->Release();
+        if (pErrorBlob) pErrorBlob->Release();
+    }
+    
+    // PSO
+    {
+        struct PipelineStateStream
+        {
+            CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE RootSignature;
+            CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT   InputLayout;
+            CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY PrimitiveTopologyType;
+            CD3DX12_PIPELINE_STATE_STREAM_VS VS;
+            CD3DX12_PIPELINE_STATE_STREAM_PS PS;
+            CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS RTVFormats;
+        } pipelineStateStream;
+
+        const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        };
+
+        ID3D10Blob* pVertexShaderBlob;
+        hr = D3DReadFileToBlob(L"VertexShader.cso", &pVertexShaderBlob);
+
+        ID3D10Blob* pPixelShaderBlob;
+        hr = D3DReadFileToBlob(L"PixelShader.cso", &pPixelShaderBlob);
+
+        pipelineStateStream.RootSignature = g_pRootSignature;
+        pipelineStateStream.InputLayout = { inputLayout , std::size(inputLayout) };
+        pipelineStateStream.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pipelineStateStream.VS = CD3DX12_SHADER_BYTECODE(pVertexShaderBlob);
+        pipelineStateStream.PS = CD3DX12_SHADER_BYTECODE(pPixelShaderBlob);
+        pipelineStateStream.RTVFormats = {
+            .RTFormats{ DXGI_FORMAT_R8G8B8A8_UNORM },
+            .NumRenderTargets = 1,
+        };
+
+        const D3D12_PIPELINE_STATE_STREAM_DESC pipelineStateStreamDesc = {
+            sizeof(pipelineStateStream), &pipelineStateStream
+        };
+
+        hr = g_pDevice->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&g_pPipelineState));
+    }
 }
 
 void render()
@@ -173,11 +226,23 @@ void render()
     constexpr float step = 0.01f;
     t = t + step;
 
+    const CD3DX12_RECT scissorRect{ 0, 0, LONG_MAX, LONG_MAX };
+
+    const CD3DX12_VIEWPORT viewport{ 0.0f, 0.0f, float(Width), float(Height) };
+
     HRESULT hr;
 
     UINT curBackBufferIndex = g_pSwapChain->GetCurrentBackBufferIndex();
     auto& backBuffer = g_backBuffers[curBackBufferIndex];
-    
+   
+    const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+    const CD3DX12_CPU_DESCRIPTOR_HANDLE rtv{
+        g_pRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+        (INT)curBackBufferIndex,
+        rtvDescriptorSize
+    };
+
     //reset command allocator and command list
     hr = g_pCommandAllocator->Reset();
     hr = g_pGraphicsCommandList->Reset(g_pCommandAllocator, nullptr);
@@ -194,15 +259,22 @@ void render()
             sin(5.f * t + 5.0f) / 2.f + 0.5f,
             1.0f};
        
-        const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-        const CD3DX12_CPU_DESCRIPTOR_HANDLE rtv{
-            g_pRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-            (INT)curBackBufferIndex,
-            rtvDescriptorSize
-        };
         
         g_pGraphicsCommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+    }
+    
+    // draw
+	{
+        g_pGraphicsCommandList->SetPipelineState(g_pPipelineState);
+        g_pGraphicsCommandList->SetGraphicsRootSignature(g_pRootSignature);
+        g_pGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        g_pGraphicsCommandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
+        g_pGraphicsCommandList->RSSetViewports(1, &viewport);
+        g_pGraphicsCommandList->RSSetScissorRects(1, &scissorRect);
+        g_pGraphicsCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+
+        g_pGraphicsCommandList->DrawInstanced(g_NumVertices, 1, 0, 0);
     }
 
     // prepare buffer for presentation

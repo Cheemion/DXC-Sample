@@ -22,4 +22,5 @@ UINT g_NumVertices;
 ID3D12Resource* g_pVertexBuffer;
 ID3D12Resource* g_pVertexUploadBuffer;
 D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView;
-
+ID3D12RootSignature* g_pRootSignature;
+ID3D12PipelineState* g_pPipelineState;

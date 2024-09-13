@@ -12,6 +12,9 @@
 #include <numbers>
 #include <ranges>
 
+// read shader code
+#include <d3dcompiler.h>
+
 struct Vertex
 {
     DirectX::XMFLOAT3 position;
