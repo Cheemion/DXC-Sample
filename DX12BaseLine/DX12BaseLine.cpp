@@ -105,9 +105,14 @@ void initDeviceAndResource()
     // create vertex buffer and upload
     {
         const Vertex vertexData[] = {
-            {{0.0f,  0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}}, // top
-            {{0.43f, -0.25f, 0.0f}, {0.0f, 0.0f, 1.0f}}, // right
-            {{-0.43f,  -0.25f, 0.0f}, {0.0f, 1.0f, 0.0f}}, // left
+            {{-1.0f,  -1.0f, -1.0f}, {0.0f, 0.0f, 0.0f}},
+            {{-1.0f,  1.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
+            {{1.0f,  1.0f, -1.0f}, {1.0f, 1.0f, 0.0f}},
+            {{1.0f,  -1.0f, -1.0f}, {1.0f, 0.0f, 0.0f}},
+            {{-1.0f,  -1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}},
+            {{-1.0f,  1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
+            {{1.0f,  1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}},
+            {{1.0f,  -1.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
         };
 
         g_NumVertices = std::size(vertexData);
@@ -164,6 +169,70 @@ void initDeviceAndResource()
         g_vertexBufferView.StrideInBytes  = sizeof(Vertex);
     }
     
+    // create index buffer
+    {
+        const WORD indexData[] = {
+            0, 1, 2, 0, 2, 3,
+            4, 6, 5, 4, 7, 6,
+            4,5,1,4,1,0,
+            3,2,6,3,6,7,
+            1,5,6,1,6,2,
+            4,0,3,4,3,7
+        };
+        g_NumIndices = std::size(indexData);
+
+        const CD3DX12_HEAP_PROPERTIES heapPropsDefault{ D3D12_HEAP_TYPE_DEFAULT };
+        const CD3DX12_HEAP_PROPERTIES heapPropsUpload{ D3D12_HEAP_TYPE_UPLOAD };
+        const auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(indexData));
+
+        // for GPU read
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, IID_PPV_ARGS(&g_pIndexBuffer));
+        // for upload vertex buffer
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&g_pIndexUploadBuffer));
+
+        // upload index buffer 
+        WORD* mappedIndexData = nullptr;
+        hr = g_pIndexUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndexData));
+        std::ranges::copy(indexData, mappedIndexData);
+        g_pIndexUploadBuffer->Unmap(0, nullptr);
+
+        //reset command allocator and command list
+        hr = g_pCommandAllocator->Reset();
+        hr = g_pGraphicsCommandList->Reset(g_pCommandAllocator, nullptr);
+        g_pGraphicsCommandList->CopyResource(g_pIndexBuffer, g_pIndexUploadBuffer);
+        g_pGraphicsCommandList->Close();
+
+        ID3D12CommandList* const commandLists[] = { g_pGraphicsCommandList };
+        g_pCommandQueue->ExecuteCommandLists(std::size(commandLists), commandLists);
+
+        //waitting the fence
+        hr = g_pCommandQueue->Signal(g_pFence, ++g_fenceValue);
+        hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
+        if (WaitForSingleObject(g_fenceEvent, INFINITE) == WAIT_FAILED)
+        {
+            DWORD errorCode = GetLastError();
+        }
+    }
+    
+    // create the index buffer view
+    {
+        g_indexBufferView = {
+            .BufferLocation = g_pIndexBuffer->GetGPUVirtualAddress(),
+            .SizeInBytes = g_NumIndices * sizeof(DWORD),
+            .Format = DXGI_FORMAT_R16_UINT,
+        };
+    }
+
     // init root signature
     { 
         CD3DX12_ROOT_PARAMETER rootParameters[1]{};
@@ -239,10 +308,6 @@ void render()
     static float t = 0.f;
     constexpr float step = 0.01f;
     t = t + step;
-    if (t > 2 * 3.1415926)
-    {
-        t = 0.0f;
-    }
 
     const CD3DX12_RECT scissorRect{ 0, 0, LONG_MAX, LONG_MAX };
 
@@ -252,7 +317,7 @@ void render()
     DirectX::XMMATRIX viewProjection;
     {
         // setup view (camera) matrix
-        const auto eyePosition = DirectX::XMVectorSet(0, 0, -1, 1);
+        const auto eyePosition = DirectX::XMVectorSet(0, 0, -6, 1);
         const auto focusPoint = DirectX::XMVectorSet(0, 0, 0, 1);
         const auto upDirection = DirectX::XMVectorSet(0, 1, 0, 0);
         const auto view = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
@@ -304,15 +369,21 @@ void render()
         g_pGraphicsCommandList->SetGraphicsRootSignature(g_pRootSignature);
         g_pGraphicsCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         g_pGraphicsCommandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
+        g_pGraphicsCommandList->IASetIndexBuffer(&g_indexBufferView);
         g_pGraphicsCommandList->RSSetViewports(1, &viewport);
         g_pGraphicsCommandList->RSSetScissorRects(1, &scissorRect);
         g_pGraphicsCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
         
         // bind const buffer, mvp matrix
-        const auto mvp = DirectX::XMMatrixTranspose(DirectX::XMMatrixRotationZ(t) * viewProjection);
+        const auto mvp = DirectX::XMMatrixTranspose(
+           DirectX::XMMatrixRotationX(1.3f * t + 1.f) * 
+           DirectX::XMMatrixRotationY(1.2f * t + 2.f) * 
+           DirectX::XMMatrixRotationZ(1.1f * t + 0.f) * 
+           viewProjection
+        );
 
         g_pGraphicsCommandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp) / 4, &mvp, 0);
-        g_pGraphicsCommandList->DrawInstanced(g_NumVertices, 1, 0, 0);
+        g_pGraphicsCommandList->DrawIndexedInstanced(g_NumIndices, 1, 0, 0, 0);
     }
 
     // prepare buffer for presentation

@@ -18,9 +18,14 @@ IDXGIFactory4* g_pDxgiFactory;
 uint64_t g_fenceValue = 0;
 HANDLE g_fenceEvent;
 UINT g_NumVertices;
+UINT g_NumIndices;
 
 ID3D12Resource* g_pVertexBuffer;
 ID3D12Resource* g_pVertexUploadBuffer;
 D3D12_VERTEX_BUFFER_VIEW g_vertexBufferView;
 ID3D12RootSignature* g_pRootSignature;
 ID3D12PipelineState* g_pPipelineState;
+
+ID3D12Resource* g_pIndexBuffer;
+ID3D12Resource* g_pIndexUploadBuffer;
+D3D12_INDEX_BUFFER_VIEW g_indexBufferView;
