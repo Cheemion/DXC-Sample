@@ -166,8 +166,22 @@ void initDeviceAndResource()
     
     // init root signature
     { 
+        CD3DX12_ROOT_PARAMETER rootParameters[1]{};
+    
+        rootParameters[0].InitAsConstants(sizeof(DirectX::XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+        
+        const D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_MESH_SHADER_ROOT_ACCESS |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_AMPLIFICATION_SHADER_ROOT_ACCESS |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
+
         CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-        rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+        rootSignatureDesc.Init(std::size(rootParameters), rootParameters,
+            0, nullptr, rootSignatureFlags);
         ID3D10Blob* pSignatureBlob;
         ID3D10Blob* pErrorBlob;
 
@@ -225,10 +239,30 @@ void render()
     static float t = 0.f;
     constexpr float step = 0.01f;
     t = t + step;
+    if (t > 2 * 3.1415926)
+    {
+        t = 0.0f;
+    }
 
     const CD3DX12_RECT scissorRect{ 0, 0, LONG_MAX, LONG_MAX };
 
     const CD3DX12_VIEWPORT viewport{ 0.0f, 0.0f, float(Width), float(Height) };
+    
+    // set view projection matrix
+    DirectX::XMMATRIX viewProjection;
+    {
+        // setup view (camera) matrix
+        const auto eyePosition = DirectX::XMVectorSet(0, 0, -1, 1);
+        const auto focusPoint = DirectX::XMVectorSet(0, 0, 0, 1);
+        const auto upDirection = DirectX::XMVectorSet(0, 1, 0, 0);
+        const auto view = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+
+        // setup perspective projection matrix
+        const auto aspectRatio = float(Width) / float(Height);
+        const auto projection = DirectX::XMMatrixPerspectiveFovLH(DirectX::XMConvertToRadians(65.f), aspectRatio, 0.1f, 100.0f);
+        //
+        viewProjection = view * projection;
+    }
 
     HRESULT hr;
 
@@ -263,7 +297,7 @@ void render()
         
         g_pGraphicsCommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     }
-    
+     
     // draw
 	{
         g_pGraphicsCommandList->SetPipelineState(g_pPipelineState);
@@ -273,7 +307,11 @@ void render()
         g_pGraphicsCommandList->RSSetViewports(1, &viewport);
         g_pGraphicsCommandList->RSSetScissorRects(1, &scissorRect);
         g_pGraphicsCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+        
+        // bind const buffer, mvp matrix
+        const auto mvp = DirectX::XMMatrixTranspose(DirectX::XMMatrixRotationZ(t) * viewProjection);
 
+        g_pGraphicsCommandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp) / 4, &mvp, 0);
         g_pGraphicsCommandList->DrawInstanced(g_NumVertices, 1, 0, 0);
     }
 
@@ -338,13 +376,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     initDeviceAndResource();
 
-    MSG msg = { };
-    while (GetMessage(&msg, NULL, 0, 0) > 0)
+    while (true)
     {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-        if(!g_ShutDown)
-            render();
+		MSG msg = { };
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE) > 0)
+        {
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+        }
+        if (g_ShutDown) break;
+		render();
     }
 
     return 0;
