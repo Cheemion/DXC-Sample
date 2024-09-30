@@ -212,6 +212,7 @@ void initDeviceAndResource()
     }
     
     // create index buffer
+    // ToDo ::after upload, should be transionted to read state. 
     {
         const WORD indexData[] = {
             0, 1, 2, 0, 2, 3,
@@ -270,9 +271,12 @@ void initDeviceAndResource()
     {
         g_indexBufferView = {
             .BufferLocation = g_pIndexBuffer->GetGPUVirtualAddress(),
-            .SizeInBytes = (g_NumIndices * (UINT)sizeof(DWORD)),
+            .SizeInBytes = (g_NumIndices * (UINT)sizeof(WORD)),
             .Format = DXGI_FORMAT_R16_UINT,
         };
+        int xx = (UINT)sizeof(DWORD);
+        int xxxx = g_NumIndices * (UINT)sizeof(DWORD);
+        int i = 1;
     }
 
     // init root signature
@@ -368,7 +372,7 @@ void initDeviceAndResource()
             &resourceDesc,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr, IID_PPV_ARGS(&faceColorBuffer));
-        // for upload buffer
+        // for upload color buffer
         hr = g_pDevice->CreateCommittedResource(
             &heapPropsUpload,
             D3D12_HEAP_FLAG_NONE,
@@ -376,7 +380,7 @@ void initDeviceAndResource()
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr, IID_PPV_ARGS(&faceColorUploadBuffer));
 
-        // upload index buffer 
+        // upload color buffer 
         DirectX::XMFLOAT4* mappedIndexData = nullptr;
         hr = faceColorUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndexData));
         std::ranges::copy(faceColors, mappedIndexData);
