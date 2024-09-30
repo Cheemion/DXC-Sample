@@ -27,6 +27,7 @@ void initDeviceAndResource()
     {
         hr = D3D12GetDebugInterface(IID_PPV_ARGS(&g_pDebugerLayer));
         g_pDebugerLayer->EnableDebugLayer();
+        g_pDebugerLayer->SetEnableGPUBasedValidation(true);
     }
 
     hr = CreateDXGIFactory2(g_enableDebuggerLayer ? DXGI_CREATE_FACTORY_DEBUG : 0, IID_PPV_ARGS(&g_pDxgiFactory));
@@ -73,7 +74,48 @@ void initDeviceAndResource()
 
         hr = g_pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_pRtvDescriptorHeap));
     }
+   
+    // create depth buffer 
+    {
+        const CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC desc = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_D32_FLOAT,
+            Width, Height,
+            1, 0, 1, 0,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+        const D3D12_CLEAR_VALUE clearValue = {
+            .Format = DXGI_FORMAT_D32_FLOAT,
+            .DepthStencil = {1.0f, 0},
+        };
+
+        g_pDevice->CreateCommittedResource(
+            &heapProperties,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            &clearValue,
+            IID_PPV_ARGS(&g_pDepthBuffer)
+        );
+    }
     
+    {
+        // create dsv(depth stencil view) descriptor heap
+        const D3D12_DESCRIPTOR_HEAP_DESC desc =
+        {
+            .Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+            .NumDescriptors = 1,
+        };
+        g_pDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_pDepthDescriptorHeap));
+
+
+        const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{
+            g_pDepthDescriptorHeap->GetCPUDescriptorHandleForHeapStart() };
+
+        g_pDevice->CreateDepthStencilView(g_pDepthBuffer, nullptr, dsvHandle);
+    }
+    
+
     const auto rtvDescriptorSize = g_pDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     // create rtv descriptor and backbuffer resource
     {
@@ -105,14 +147,14 @@ void initDeviceAndResource()
     // create vertex buffer and upload
     {
         const Vertex vertexData[] = {
-            {{-1.0f,  -1.0f, -1.0f}, {0.0f, 0.0f, 0.0f}},
-            {{-1.0f,  1.0f, -1.0f}, {0.0f, 1.0f, 0.0f}},
-            {{1.0f,  1.0f, -1.0f}, {1.0f, 1.0f, 0.0f}},
-            {{1.0f,  -1.0f, -1.0f}, {1.0f, 0.0f, 0.0f}},
-            {{-1.0f,  -1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}},
-            {{-1.0f,  1.0f, 1.0f}, {0.0f, 1.0f, 1.0f}},
-            {{1.0f,  1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}},
-            {{1.0f,  -1.0f, 1.0f}, {1.0f, 0.0f, 1.0f}},
+            {{-1.0f,  -1.0f, -1.0f}},
+            {{-1.0f,  1.0f, -1.0f}},
+            {{1.0f,  1.0f, -1.0f}},
+            {{1.0f,  -1.0f, -1.0f}},
+            {{-1.0f,  -1.0f, 1.0f}},
+            {{-1.0f,  1.0f, 1.0f}},
+            {{1.0f,  1.0f, 1.0f}},
+            {{1.0f,  -1.0f, 1.0f}},
         };
 
         g_NumVertices = std::size(vertexData);
@@ -228,16 +270,17 @@ void initDeviceAndResource()
     {
         g_indexBufferView = {
             .BufferLocation = g_pIndexBuffer->GetGPUVirtualAddress(),
-            .SizeInBytes = g_NumIndices * sizeof(DWORD),
+            .SizeInBytes = (g_NumIndices * (UINT)sizeof(DWORD)),
             .Format = DXGI_FORMAT_R16_UINT,
         };
     }
 
     // init root signature
     { 
-        CD3DX12_ROOT_PARAMETER rootParameters[1]{};
+        CD3DX12_ROOT_PARAMETER rootParameters[2]{};
     
         rootParameters[0].InitAsConstants(sizeof(DirectX::XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+        rootParameters[1].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_PIXEL);
         
         const D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
@@ -245,8 +288,7 @@ void initDeviceAndResource()
             D3D12_ROOT_SIGNATURE_FLAG_DENY_AMPLIFICATION_SHADER_ROOT_ACCESS |
             D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
             D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
+            D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
 
         CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
         rootSignatureDesc.Init(std::size(rootParameters), rootParameters,
@@ -271,12 +313,12 @@ void initDeviceAndResource()
             CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY PrimitiveTopologyType;
             CD3DX12_PIPELINE_STATE_STREAM_VS VS;
             CD3DX12_PIPELINE_STATE_STREAM_PS PS;
+            CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL_FORMAT DSVFormat;
             CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS RTVFormats;
         } pipelineStateStream;
 
         const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
-            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-            {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
         };
 
         ID3D10Blob* pVertexShaderBlob;
@@ -290,6 +332,7 @@ void initDeviceAndResource()
         pipelineStateStream.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         pipelineStateStream.VS = CD3DX12_SHADER_BYTECODE(pVertexShaderBlob);
         pipelineStateStream.PS = CD3DX12_SHADER_BYTECODE(pPixelShaderBlob);
+        pipelineStateStream.DSVFormat = DXGI_FORMAT_D32_FLOAT;
         pipelineStateStream.RTVFormats = {
             .RTFormats{ DXGI_FORMAT_R8G8B8A8_UNORM },
             .NumRenderTargets = 1,
@@ -301,6 +344,65 @@ void initDeviceAndResource()
 
         hr = g_pDevice->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&g_pPipelineState));
     }
+
+    {
+
+        const DirectX::XMFLOAT4 faceColors[] = {
+            {1.0f, 0.f, 0.f, 1.f},
+            {0.0f, 1.f, 0.f, 1.f},
+            {0.0f, 0.f, 1.f, 1.f},
+            {1.0f, 0.f, 1.f, 1.f},
+            {0.0f, 1.f, 1.f, 1.f},
+            {1.0f, 1.f, 0.f, 1.f},
+        };
+
+        
+        const CD3DX12_HEAP_PROPERTIES heapPropsDefault{ D3D12_HEAP_TYPE_DEFAULT };
+        const CD3DX12_HEAP_PROPERTIES heapPropsUpload{ D3D12_HEAP_TYPE_UPLOAD };
+        const auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(faceColors));
+
+        // for GPU read
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsDefault,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, IID_PPV_ARGS(&faceColorBuffer));
+        // for upload buffer
+        hr = g_pDevice->CreateCommittedResource(
+            &heapPropsUpload,
+            D3D12_HEAP_FLAG_NONE,
+            &resourceDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&faceColorUploadBuffer));
+
+        // upload index buffer 
+        DirectX::XMFLOAT4* mappedIndexData = nullptr;
+        hr = faceColorUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedIndexData));
+        std::ranges::copy(faceColors, mappedIndexData);
+        faceColorUploadBuffer->Unmap(0, nullptr);
+    
+
+        //reset command allocator and command list
+        hr = g_pCommandAllocator->Reset();
+        hr = g_pGraphicsCommandList->Reset(g_pCommandAllocator, nullptr);
+        g_pGraphicsCommandList->CopyResource(faceColorBuffer, faceColorUploadBuffer);
+        g_pGraphicsCommandList->Close();
+
+       
+        ID3D12CommandList* const commandLists[] = { g_pGraphicsCommandList };
+        g_pCommandQueue->ExecuteCommandLists(std::size(commandLists), commandLists);
+
+        //waitting the fence
+        hr = g_pCommandQueue->Signal(g_pFence, ++g_fenceValue);
+        hr = g_pFence->SetEventOnCompletion(g_fenceValue, g_fenceEvent);
+        if (WaitForSingleObject(g_fenceEvent, INFINITE) == WAIT_FAILED)
+        {
+            DWORD errorCode = GetLastError();
+        }
+
+    }
+
 }
 
 void render()
@@ -342,6 +444,9 @@ void render()
         rtvDescriptorSize
     };
 
+    const CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle{
+        g_pDepthDescriptorHeap->GetCPUDescriptorHandleForHeapStart()
+    };
     //reset command allocator and command list
     hr = g_pCommandAllocator->Reset();
     hr = g_pGraphicsCommandList->Reset(g_pCommandAllocator, nullptr);
@@ -358,9 +463,9 @@ void render()
             sin(5.f * t + 5.0f) / 2.f + 0.5f,
             1.0f};
        
-
-        
         g_pGraphicsCommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+
+        g_pGraphicsCommandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
      
     // draw
@@ -372,17 +477,30 @@ void render()
         g_pGraphicsCommandList->IASetIndexBuffer(&g_indexBufferView);
         g_pGraphicsCommandList->RSSetViewports(1, &viewport);
         g_pGraphicsCommandList->RSSetScissorRects(1, &scissorRect);
-        g_pGraphicsCommandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+
+        g_pGraphicsCommandList->SetGraphicsRootConstantBufferView(1, faceColorBuffer->GetGPUVirtualAddress());
+
+        g_pGraphicsCommandList->OMSetRenderTargets(1, &rtv, TRUE, &dsvHandle);
         
         // bind const buffer, mvp matrix
         const auto mvp = DirectX::XMMatrixTranspose(
-           DirectX::XMMatrixRotationX(1.3f * t + 1.f) * 
-           DirectX::XMMatrixRotationY(1.2f * t + 2.f) * 
-           DirectX::XMMatrixRotationZ(1.1f * t + 0.f) * 
+           DirectX::XMMatrixRotationX(-1.0f * t + 1.f) * 
+           DirectX::XMMatrixRotationY(-1.2f * t + 2.f) * 
+           DirectX::XMMatrixRotationZ(-1.1f * t + 0.f) * 
            viewProjection
         );
-
         g_pGraphicsCommandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp) / 4, &mvp, 0);
+        g_pGraphicsCommandList->DrawIndexedInstanced(g_NumIndices, 1, 0, 0, 0);
+
+
+        // bind const buffer, mvp matrix
+        const auto mvp1 = DirectX::XMMatrixTranspose(
+           DirectX::XMMatrixRotationX(1.3f * t - 1.f) * 
+           DirectX::XMMatrixRotationY(1.2f * t - 2.f) * 
+           DirectX::XMMatrixRotationZ(1.4f * t + 0.f) * 
+           viewProjection
+        );
+        g_pGraphicsCommandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp1) / 4, &mvp1, 0);
         g_pGraphicsCommandList->DrawIndexedInstanced(g_NumIndices, 1, 0, 0, 0);
     }
 

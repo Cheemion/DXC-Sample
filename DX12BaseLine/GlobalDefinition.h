@@ -5,7 +5,7 @@ constexpr UINT bufferCount = 2;
 bool g_enableDebuggerLayer = true;
 bool g_ShutDown = false;
 HWND g_hwnd;
-ID3D12Debug* g_pDebugerLayer;
+ID3D12Debug1* g_pDebugerLayer;
 ID3D12Device2* g_pDevice;
 ID3D12CommandQueue* g_pCommandQueue;
 IDXGISwapChain4* g_pSwapChain;
@@ -29,3 +29,10 @@ ID3D12PipelineState* g_pPipelineState;
 ID3D12Resource* g_pIndexBuffer;
 ID3D12Resource* g_pIndexUploadBuffer;
 D3D12_INDEX_BUFFER_VIEW g_indexBufferView;
+
+ID3D12Resource* g_pDepthBuffer;
+ID3D12DescriptorHeap* g_pDepthDescriptorHeap;
+
+
+ID3D12Resource* faceColorBuffer;
+ID3D12Resource* faceColorUploadBuffer;
